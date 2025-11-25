@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CardPulse
+
+  Sample SAM Template for CardPulse
+
+Metadata: {}
+
+Parameters:
+  DataPrefix:
+    Type: String
+    Description: "Lambda関数(card-pulse-price-fetcher)が、設置するcardpulse-scraping-bucketの格納先"
+  CsvContainsHeader:
+    Type: String
+    AllowedValues: [PRESENT, ABSENT, UNKNOWN]
+    Default: PRESENT
+    Description: "CSV にヘッダ行があるか。PRESENT | ABSENT | UNKNOWN"
+  CsvDelimiter:
+    Type: String
+    Default: ','
+    Description: "CSV 区切り文字 (例: , | ; | \t)"
+  CsvQuoteSymbol:
+    Type: String
+    Default: '"'
+    Description: "CSV クォート文字 (例: ' or \")"
+  LambdaEventJson:
+    Type: String
+    Description: "EventBridgeがLambdaに渡す引数"
+    # 渡すべき引数は以下
+    # target_uris: List[string]
+    #   スクレイピングする対象ページのURIリスト
+    #   Exaple
+    #   '{"target_uris": ["3055/0/photo", "3193/0/photo"]}'
+
+Resources:
+  CardPulseScrapingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: cardpulse-scraping-bucket
+      VersioningConfiguration:
+        Status: Suspended
+  PriceFetcherFunctionServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PutCardPulseScrapingBucket
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PutObject
+                Effect: Allow
+                Action:
+                  - "s3:PutObject"
+                Resource:
+                  - !Sub "arn:aws:s3:::${CardPulseScrapingBucket}/*"
+  # --- Lambda ---
+  PriceFetcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: card-pulse-price-fetcher
+      Role: !GetAtt PriceFetcherFunctionServiceRole.Arn
+      CodeUri: functions/price_fetcher/
+      Handler: app.lambda_handler
+      Runtime: python3.13
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          TARGET_DOMAIN: https://www.c-labo-online.jp/product-list/
+          BUCKET_NAME: !Ref CardPulseScrapingBucket
+      Timeout: 60
+      MemorySize: 512
+      Events:
+        DailySchedule:
+          Type: Schedule
+          Properties:
+            # JST 0:00 = UTC 15:00
+            # cron(分 時 日 月 曜日 年)
+            Schedule: "cron(0 15 * * ? *)"
+            Name: !Sub "${AWS::StackName}-daily-00-jst"
+            Description: "Run lambda every day at 00:00 JST"
+            Enabled: true
+            Input: !Ref LambdaEventJson
+  
+  # --- Glue Database ---
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: card-price
+  # --- CSV Classifier (使い回し可能) ---
+  CsvClassifier:
+    Type: AWS::Glue::Classifier
+    Properties:
+      CsvClassifier:
+        Name: card-pulse-csv-classifier
+        ContainsHeader: !Ref CsvContainsHeader
+        Delimiter: !Ref CsvDelimiter
+        QuoteSymbol: !Ref CsvQuoteSymbol
+        AllowSingleColumn: true
+  # --- IAM Role for Glue ---
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: GlueS3AccessForCrawler
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListBuckets
+                Effect: Allow
+                Action: ["s3:ListBucket"]
+                Resource:
+                  - !GetAtt CardPulseScrapingBucket.Arn
+              - Sid: ReadDataPrefix
+                Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                Resource:
+                  - !Sub "arn:aws:s3:::${CardPulseScrapingBucket}/${DataPrefix}*"
+  # --- Glue Crawler ---
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - GlueDatabase
+    Properties:
+      Name: CardPulseCrawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: card-price
+      Classifiers:
+        - !Ref CsvClassifier
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${CardPulseScrapingBucket}/${DataPrefix}"
+      # スキーマ変更時の挙動など
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+            "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+          },
+          "CreatePartitionIndex": true
+        }
+      Schedule:
+        # JST 0:30 = UTC 15:30
+        # cron(分 時 日 月 曜日 年)
+        ScheduleExpression: "cron(30 15 * * ? *)"
+  # --- Athena ---
+  CardPulseAthenaResultBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: card-pulse-athena-result-bucket
+      VersioningConfiguration:
+        Status: Suspended
+  CardPulseAthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: cardpulse-athena-wg
+      Description: "Workgroup with predefined result configuration"
+      State: ENABLED
+      WorkGroupConfiguration:
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${CardPulseAthenaResultBucket}/"
