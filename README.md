@@ -23,6 +23,7 @@
 
 ## 使用方法
 - 前提: Python 3.13系、AWS CLI、SAM CLI、AWS認証情報が利用可能であること。
+  - SAM CLI - [Install the SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
 - 依存ライブラリ確認（ローカル動作確認時など任意）:
     - `pip install -r functions/price_fetcher/requirements.txt`
 - ビルドとデプロイ:
