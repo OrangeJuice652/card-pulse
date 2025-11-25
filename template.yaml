@@ -8,7 +8,7 @@ Description: >
 Metadata: {}
 
 Parameters:
-  DataPrefix:
+  ScrapingDataPrefix:
     Type: String
     Description: "Lambda関数(card-pulse-price-fetcher)が、設置するcardpulse-scraping-bucketの格納先"
   CsvContainsHeader:
@@ -31,7 +31,7 @@ Parameters:
     # target_uris: List[string]
     #   スクレイピングする対象ページのURIリスト
     #   Exaple
-    #   '{"target_uris": ["3055/0/photo", "3193/0/photo"]}'
+    #   '{"target_domain": "https://www.c-labo-online.jp/product-list/", "target_uris": ["3055/0/photo", "3193/0/photo"]}'
 
 Resources:
   CardPulseScrapingBucket:
@@ -76,8 +76,8 @@ Resources:
       - x86_64
       Environment:
         Variables:
-          TARGET_DOMAIN: https://www.c-labo-online.jp/product-list/
           BUCKET_NAME: !Ref CardPulseScrapingBucket
+          SCRAPING_DATA_PREFIX: !Ref ScrapingDataPrefix
       Timeout: 60
       MemorySize: 512
       Events:
@@ -138,7 +138,7 @@ Resources:
                   - "s3:GetObject"
                   - "s3:GetObjectVersion"
                 Resource:
-                  - !Sub "arn:aws:s3:::${CardPulseScrapingBucket}/${DataPrefix}*"
+                  - !Sub "arn:aws:s3:::${CardPulseScrapingBucket}/${ScrapingDataPrefix}*"
   # --- Glue Crawler ---
   GlueCrawler:
     Type: AWS::Glue::Crawler
@@ -152,7 +152,7 @@ Resources:
         - !Ref CsvClassifier
       Targets:
         S3Targets:
-          - Path: !Sub "s3://${CardPulseScrapingBucket}/${DataPrefix}"
+          - Path: !Sub "s3://${CardPulseScrapingBucket}/${ScrapingDataPrefix}"
       # スキーマ変更時の挙動など
       SchemaChangePolicy:
         UpdateBehavior: UPDATE_IN_DATABASE

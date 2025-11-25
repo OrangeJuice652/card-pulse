@@ -4,12 +4,10 @@ from card_labo import CardListPageManager
 
 
 def _load_env():
-    target_domain = os.environ["TARGET_DOMAIN"]
-
     return {
-        "TARGET_DOMAIN": target_domain,
-        "BUCKET_NAME": os.environ['BUCKET_NAME'],
-        "AWS_REGION": 'ap-northeast-1',
+        'SCRAPING_DATA_PREFIX': os.environ['SCRAPING_DATA_PREFIX'],
+        'BUCKET_NAME': os.environ['BUCKET_NAME'],
+        'AWS_REGION': 'ap-northeast-1',
     }
 
 def lambda_handler(event, context):
@@ -18,14 +16,14 @@ def lambda_handler(event, context):
         now_dt = datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=9))
         )
-        target_uris = event["target_uris"]
+        target_uris = event['target_uris']
         if isinstance(event, str):
-            target_uris = json.loads(event["target_uris"])
+            target_uris = json.loads(event['target_uris'])
         records = []
         for uri in target_uris:
-            html = fetch(f'{cfg["TARGET_DOMAIN"]}{uri}')
+            html = fetch(f'{event["target_domain"]}{uri}')
             records.extend(
-                parse_cards(html, cfg["TARGET_DOMAIN"])
+                parse_cards(html, event['target_domain'])
             )
             if not html: 
                 continue
@@ -38,16 +36,16 @@ def lambda_handler(event, context):
             writer = csv.DictWriter(buf, fieldnames=sorted(records[0].keys()))
             writer.writeheader()
             writer.writerows(records)
-            key = f'cardlabo/card_type=ws/dt={now_dt.strftime("%Y-%m-%d-%H-%M")}/data.csv'
-            boto3.client("s3").put_object(Bucket=cfg["BUCKET_NAME"], Key=key, Body=buf.getvalue().encode("utf-8"))
+            key = f'{cfg['SCRAPING_DATA_PREFIX']}/card_type=ws/dt={now_dt.strftime("%Y-%m-%d-%H-%M")}/data.csv'
+            boto3.client('s3').put_object(Bucket=cfg['BUCKET_NAME'], Key=key, Body=buf.getvalue().encode('utf-8'))
     except Exception as e:
-        print("ERROR:", repr(e))
+        print('ERROR:', repr(e))
         traceback.print_exc()
-    return {"count": len(records)}
+    return {'count': len(records)}
 
-def fetch(url, headers, tries=3):
+def fetch(url, tries=3):
     for i in range(tries):
-        r = requests.get(url, headers=headers, timeout=15)
+        r = requests.get(url, timeout=15)
         if r.status_code == 200:
             return r.text
         if r.status_code in (403, 429, 503):
